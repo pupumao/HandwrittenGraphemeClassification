@@ -47,41 +47,38 @@ def crop_resize(img0, size=SIZE, pad=16):
     return cv2.resize(img,(size,size))
 
 
-##visualize
+#visualize
 # df = pd.read_parquet(TRAIN[0])
 # n_imgs = 8
 # fig, axs = plt.subplots(n_imgs, 2, figsize=(10, 5*n_imgs))
 # #
 # for idx in range(n_imgs):
 #     #somehow the original input is inverted
-#     img0 = 255 - df.iloc[idx, 1:].values.reshape(HEIGHT, WIDTH).astype(np.uint8)
+#     img0 = df.iloc[idx, 1:].values.reshape(HEIGHT, WIDTH).astype(np.uint8)
 #     #normalize each image by its max val
 #     img = (img0*(255.0/img0.max())).astype(np.uint8)
-#     img = crop_resize(img)
+#     # img = crop_resize(img)
 #
-#     axs[idx,0].imshow(img0)
-#     axs[idx,0].set_title('Original image')
-#     axs[idx,0].axis('off')
-#     axs[idx,1].imshow(img)
-#     axs[idx,1].set_title('Crop & resize')
-#     axs[idx,1].axis('off')
-# plt.show()
+#     img =cv2.cvtColor(img,cv2.COLOR_GRAY2RGB)
+#     cv2.imshow('tp',img)
+#     cv2.waitKey(0)
 
 
 
+save_dir=os.path.join(data_dir,'images')
 x_tot, x2_tot = [], []
 with zipfile.ZipFile(OUT_TRAIN, 'w') as img_out:
     for fname in TRAIN:
         df = pd.read_parquet(fname)
         # the input is inverted
-        data = 255 - df.iloc[:, 1:].values.reshape(-1, HEIGHT, WIDTH).astype(np.uint8)
+        data = 255-df.iloc[:, 1:].values.reshape(-1, HEIGHT, WIDTH).astype(np.uint8)
         for idx in tqdm(range(len(df))):
             name = df.iloc[idx, 0]
             # normalize each image by its max val
             img = (data[idx] * (255.0 / data[idx].max())).astype(np.uint8)
             # img = crop_resize(img)
 
-            x_tot.append((img / 255.0).mean())
-            x2_tot.append(((img / 255.0) ** 2).mean())
-            img = cv2.imencode('.png', img)[1]
-            img_out.writestr(name + '.png', img)
+            img =cv2.cvtColor(img,cv2.COLOR_GRAY2RGB)
+
+            save_path=os.path.join(save_dir,name + '.png')
+            cv2.imwrite(save_path,img)

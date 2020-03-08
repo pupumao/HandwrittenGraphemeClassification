@@ -6,125 +6,149 @@ import matplotlib.pyplot as plt
 import zipfile
 from tqdm import tqdm
 import torch
-from lib.core.model.semodel.SeResnet import se_resnet50
+import torch.utils.data
+import gc
+
+from lib.core.model.semodel.SeResnet import se_resnet50,se_resnext50_32x4d
 
 
 HEIGHT = 137
 WIDTH = 236
 SIZE = 128
+TEST_BATCH_SIZE=2
 
-def bbox(img):
-    rows = np.any(img, axis=1)
-    cols = np.any(img, axis=0)
-    rmin, rmax = np.where(rows)[0][[0, -1]]
-    cmin, cmax = np.where(cols)[0][[0, -1]]
-    return rmin, rmax, cmin, cmax
-
-def crop_resize(img0, size=SIZE, pad=16):
-    #crop a box around pixels large than the threshold
-    #some images contain line at the sides
-    ymin,ymax,xmin,xmax = bbox(img0[5:-5,5:-5] > 80)
-    #cropping may cut too much, so we need to add it back
-    xmin = xmin - 13 if (xmin > 13) else 0
-    ymin = ymin - 10 if (ymin > 10) else 0
-    xmax = xmax + 13 if (xmax < WIDTH - 13) else WIDTH
-    ymax = ymax + 10 if (ymax < HEIGHT - 10) else HEIGHT
-    img = img0[ymin:ymax,xmin:xmax]
-    #remove lo intensity pixels as noise
-    img[img < 28] = 0
-    lx, ly = xmax-xmin,ymax-ymin
-    l = max(lx,ly) + pad
-    #make sure that the aspect ratio is kept in rescaling
-    img = np.pad(img, [((l-ly)//2,), ((l-lx)//2,)], mode='constant')
-    return cv2.resize(img,(size,size))
-
-
-
-
-x_tot, x2_tot = [], []
-
-result = []
 data_dir = '/media/lz/ssd_2/kaggle/data'
 
-model_path='./model/epoch_0_val_loss1.367250.pth'
+model_list=['./models/epoch_1_val_loss1.468146.pth']
+
+class BengaliDatasetTest:
+    def __init__(self, df):
+        self.image_ids = df.image_id.values
+        self.img_arr = df.iloc[:, 1:].values
+
+
+
+    def __len__(self):
+        return len(self.image_ids)
+
+    def __getitem__(self, item):
+        image = self.img_arr[item, :]
+        img_id = self.image_ids[item]
+
+        image = 255-image.reshape(137, 236).astype(np.uint8)
+
+        image=self.preprocess(image)
+
+
+        return {
+            "image": image,
+            "image_id": img_id
+        }
+
+
+    def preprocess(self,img):
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
+        img = cv2.resize(img, (WIDTH, HEIGHT), interpolation=cv2.INTER_NEAREST)
+
+        cv2.imshow('ss',img)
+        cv2.waitKey(0)
+        img = np.transpose(img, axes=[2, 0, 1])
+        img = img/255.
+        img = img.astype(np.float32)
+        return img
+
+
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-HWmodel=se_resnet50()
-
-HWmodel.load_state_dict(torch.load(model_path, map_location=device), strict=False)
-HWmodel.to(device)
-HWmodel.eval()
-
-TEST = [os.path.join(data_dir, 'test_image_data_0.parquet'),
-        os.path.join(data_dir, 'test_image_data_1.parquet'),
-        os.path.join(data_dir, 'test_image_data_2.parquet'),
-        os.path.join(data_dir, 'test_image_data_3.parquet')]
 
 
-
-pred_dict = {
-    'grapheme_root': [],
-    'vowel_diacritic': [],
-    'consonant_diacritic': []
-}
+def predict_with_model(model):
+    g_pred, v_pred, c_pred = [], [], []
+    img_ids_list = []
 
 
-components = ['consonant_diacritic', 'grapheme_root', 'vowel_diacritic']
+    TEST = [os.path.join(data_dir, 'test_image_data_0.parquet'),
+            os.path.join(data_dir, 'test_image_data_1.parquet'),
+            os.path.join(data_dir, 'test_image_data_2.parquet'),
+            os.path.join(data_dir, 'test_image_data_3.parquet')
+            ]
 
-target=[] # model predictions placeholder
-row_id=[] # row_id place holder
+    for fname in TEST:
+        df = pd.read_parquet(fname)
 
-for fname in TEST:
-    df = pd.read_parquet(fname)
-
-    df.set_index('image_id', inplace=True)
-    # the input is inverted
-    data = 255 - df.iloc[:, 1:].values.reshape(-1, HEIGHT, WIDTH).astype(np.uint8)
-    for idx in tqdm(range(len(df))):
-        cur_result = {}
-        name = df.iloc[idx, 0]
-        # normalize each image by its max val
-        img = (data[idx] * (255.0 / data[idx].max())).astype(np.uint8)
-        img = crop_resize(img)
-
-        x_tot.append((img / 255.0).mean())
-        x2_tot.append(((img / 255.0) ** 2).mean())
-        img = cv2.imencode('.png', img)[1]
-
-        print(img.shape)
-        images = torch.from_numpy(img)
-        images = images.to(device)
-
-        logit1, logit2, logit3 = HWmodel(images)
-        res1 = torch.softmax(logit1, 1)
-        res2 = torch.softmax(logit2, 1)
-        res3 = torch.softmax(logit3, 1)
-
-        res1 = res1.cpu().detach().numpy()[0, :]
-        res2 = res2.cpu().detach().numpy()[0, :]
-        res3 = res3.cpu().detach().numpy()[0, :]
-
-        preds=[res1,res2,res3]
-        for i, p in enumerate(pred_dict):
-            pred_dict[p] = np.argmax(preds[i], axis=1)
-
-        for k, id in enumerate(df.index.values):
-            for i, comp in enumerate(components):
-                id_sample = id + '_' + comp
-                row_id.append(id_sample)
-                target.append(pred_dict[comp][k])
+        dataset = BengaliDatasetTest(df=df)
         del df
+        gc.collect()
 
-        ##make predict
-print(cur_result)
+        data_loader = torch.utils.data.DataLoader(
+                    dataset=dataset,
+                    batch_size= TEST_BATCH_SIZE,
+                    shuffle=False,
+                    num_workers=1
+            )
 
 
-df_sample = pd.DataFrame(
-    {
-        'row_id': row_id,
-        'target':target
-    },
-    columns = ['row_id','target']
-)
-df_sample.to_csv('submission.csv',index=False)
-df_sample.head()
+
+        for bi, d in enumerate(data_loader):
+            image = d["image"]
+            img_id = d["image_id"]
+
+            image = image.to(device, dtype=torch.float32)
+
+            logit1, logit2, logit3 = model(image)
+            g = torch.softmax(logit1, 1)
+            v = torch.softmax(logit2, 1)
+            c = torch.softmax(logit3, 1)
+
+
+            for ii, imid in enumerate(img_id):
+                g_pred.append(g[ii].cpu().detach().numpy())
+                v_pred.append(v[ii].cpu().detach().numpy())
+                c_pred.append(c[ii].cpu().detach().numpy())
+                img_ids_list.append(imid)
+
+
+    del data_loader
+    del dataset
+    gc.collect()
+
+    return g_pred, v_pred, c_pred, img_ids_list
+
+
+
+
+final_g_pred = []
+final_v_pred = []
+final_c_pred = []
+final_img_ids = []
+
+for i in range(len(model_list)):
+
+    model = se_resnext50_32x4d()
+    model.load_state_dict(torch.load(model_list[i], map_location=device))
+    model.to(device)
+    model.eval()
+    g_pred, v_pred, c_pred, img_ids_list = predict_with_model(model)
+
+    final_g_pred.append(g_pred)
+    final_v_pred.append(v_pred)
+    final_c_pred.append(c_pred)
+    if i == 0:
+        final_img_ids.extend(img_ids_list)
+
+
+final_g = np.argmax(np.mean(np.array(final_g_pred), axis=0), axis=1)
+final_v = np.argmax(np.mean(np.array(final_v_pred), axis=0), axis=1)
+final_c = np.argmax(np.mean(np.array(final_c_pred), axis=0), axis=1)
+
+
+
+predictions = []
+for ii, imid in enumerate(final_img_ids):
+    predictions.append((f"{imid}_grapheme_root", final_g[ii]))
+    predictions.append((f"{imid}_vowel_diacritic", final_v[ii]))
+    predictions.append((f"{imid}_consonant_diacritic", final_c[ii]))
+
+
+sub = pd.DataFrame(predictions, columns=["row_id", "target"])
+sub.to_csv("submission.csv", index=False)

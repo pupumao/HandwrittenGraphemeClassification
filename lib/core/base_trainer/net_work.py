@@ -1,29 +1,38 @@
 #-*-coding:utf-8-*-
 
 import sklearn.metrics
-
+import cv2
 import time
 import os
 import torch.nn as nn
+import numpy as np
 from train_config import config as cfg
 #from lib.dataset.dataietr import DataIter
 
-
+import sklearn.metrics
 from lib.helper.logger import logger
 
 from lib.core.model.ShuffleNet_Series.ShuffleNetV2.utils import accuracy, AvgrageMeter, CrossEntropyLabelSmooth, save_checkpoint, get_lastest_model, get_parameters
 from lib.core.model.loss.focal_loss import FocalLoss
+from lib.core.model.loss.ohem import OHEMLoss
 from lib.core.model.head.simple_head import Header
 
 from lib.core.model.ShuffleNet_Series.ShuffleNetV2.network import ShuffleNetV2
 
-from lib.core.model.semodel.SeResnet import se_resnet50
+from lib.core.model.semodel.SeResnet import se_resnet50,se_resnext50_32x4d
 
 import torch.nn as nn
 
 from torch.optim.lr_scheduler import _LRScheduler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+
+
+from lib.core.model.mix.mix import mixup,cutmix,mixup_criterion,cutmix_criterion
+import random
+
+
 import torch
+from apex import amp
 
 class GradualWarmupScheduler(_LRScheduler):
     """ Gradually warm-up(increasing) learning rate in optimizer.
@@ -101,14 +110,11 @@ class Train(object):
     self.l2_regularization=cfg.TRAIN.weight_decay_factor
 
 
-
-
     self.device = torch.device("cuda")
 
-    self.model = se_resnet50().to(self.device)
+    self.model = se_resnext50_32x4d().to(self.device)
 
-
-
+    # self.model = ShuffleNetV2('1.0x').to(self.device)
 
 
     if 'Adam' in cfg.TRAIN.opt:
@@ -122,6 +128,10 @@ class Train(object):
                                 lr=0.001,
                                 momentum=0.99,
                                 weight_decay=cfg.TRAIN.weight_decay_factor)
+
+
+    if cfg.TRAIN.mix_precision:
+        self.model, self.optimizer = amp.initialize( self.model, self.optimizer, opt_level="O1")
     ###control vars
     self.iter_num=0
 
@@ -133,18 +143,25 @@ class Train(object):
 
     self.val_ds = val_ds
 
-    # self.scheduler = torch.optim.lr_scheduler.MultiStepLR( self.optimizer, milestones=[100,120,140], gamma=0.1)
-    scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR( self.optimizer, 50)
-    self.scheduler = GradualWarmupScheduler( self.optimizer, multiplier=1, total_epoch=5, after_scheduler=scheduler_cosine)
+    self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau( self.optimizer, patience=5,verbose=True)
+    # scheduler_cosine = torch.optim.lr_scheduler.CosineAnnealingLR( self.optimizer, self.epochs)
+    # self.scheduler = GradualWarmupScheduler( self.optimizer, multiplier=1, total_epoch=5, after_scheduler=scheduler_cosine)
 
     self.losser= torch.nn.CrossEntropyLoss()
     if cfg.MODEL.focal_loss:
         self.losser1=FocalLoss(class_num=168)
         self.losser2 = FocalLoss(class_num=11)
         self.losser3 = FocalLoss(class_num=7)
+
+    elif cfg.MODEL.ohem:
+        self.losser1 = OHEMLoss(self.batch_size)
+        self.losser2 = OHEMLoss(self.batch_size)
+        self.losser3 = OHEMLoss(self.batch_size)
+
+
   def loss_function(self,predicts,labels):
 
-    labels=labels.long()
+
 
 
 
@@ -189,6 +206,47 @@ class Train(object):
            correct1/self.batch_size,\
            correct2/self.batch_size,\
            correct3/self.batch_size
+  def recall_function(self,predicts,labels):
+
+      def get_recall(y_true, y_pred):
+          pred_labels = np.argmax(y_pred, axis=1)
+          res = sklearn.metrics.recall_score(y_true, pred_labels, average='macro')
+          return res
+
+      labels=labels.cpu().numpy()
+      logit1 = predicts[0]
+      logit2 = predicts[1]
+      logit3 = predicts[2]
+
+      res1 = torch.softmax(logit1, 1)
+      res2 = torch.softmax(logit2, 1)
+      res3 = torch.softmax(logit3, 1)
+
+      res1 = res1.cpu().detach().numpy()
+
+      res2 = res2.cpu().detach().numpy()
+      res3 = res3.cpu().detach().numpy()
+
+
+      all_preds = [res1,res2,res3]
+      recall_grapheme = get_recall(labels[:, 0], all_preds[0], )
+      recall_vowel = get_recall(labels[:, 1], all_preds[1], )
+      recall_consonant = get_recall(labels[:, 2], all_preds[2], )
+
+      recall = np.average([recall_grapheme, recall_vowel, recall_consonant],
+                          weights=[2, 1, 1])
+
+
+
+
+      return recall
+
+
+
+
+
+
+
 
 
 
@@ -204,6 +262,7 @@ class Train(object):
 
     def distributed_train_epoch(epoch_num):
       total_loss = 0.0
+      total_recall = 0.0
       num_train_batches = 0.0
 
       self.model.train()
@@ -220,18 +279,58 @@ class Train(object):
 
         data, target = images_torch.to(self.device), target_torch.to(self.device)
 
+        target = target.long()
 
-        output1,output2,output3 = self.model(data)
+
+        which_aug=random.uniform(0,1)
+        if which_aug<=0.3:
 
 
-        loss1,loss2,loss3,acc1,acc2,acc3 = self.loss_function([output1,output2,output3], target)
+
+            target1 = target[:, 0]
+            target2 = target[:, 1]
+            target3 = target[:, 2]
+            data, mix_targets=mixup(data,target1,target2,target3,0.5)
+
+            output1, output2, output3 = self.model(data)
+
+            loss1,loss2,loss3,acc1,acc2,acc3=mixup_criterion(output1, output2, output3, mix_targets)
+
+
+            recall_score = self.recall_function([output1, output2, output3], target)
+
+        elif (which_aug<0.6 and which_aug>0.3):
+            target1 = target[:, 0]
+            target2 = target[:, 1]
+            target3 = target[:, 2]
+            data, mix_targets = cutmix(data, target1, target2, target3,1.)
+
+            output1, output2, output3 = self.model(data)
+
+            loss1, loss2, loss3, acc1, acc2, acc3 = cutmix_criterion(output1, output2, output3, mix_targets)
+
+            recall_score = self.recall_function([output1, output2, output3], target)
+
+        else:
+            output1,output2,output3 = self.model(data)
+
+            recall_score=self.recall_function([output1,output2,output3],target)
+
+            loss1,loss2,loss3,acc1,acc2,acc3 = self.loss_function([output1,output2,output3], target)
 
         current_loss=loss1+loss2+loss3
         self.optimizer.zero_grad()
-        current_loss.backward()
+        if cfg.TRAIN.mix_precision:
+            with amp.scale_loss(current_loss, self.optimizer) as scaled_loss:
+
+                scaled_loss.backward()
+
+        else:
+            current_loss.backward()
         self.optimizer.step()
 
         total_loss += current_loss
+        total_recall+=recall_score
         num_train_batches += 1
         self.iter_num+=1
         time_cost_per_batch=time.time()-start
@@ -249,6 +348,7 @@ class Train(object):
                       'loss3: %.6f, '
                       'acc3:  %.6f, '
                       'loss_value: %.6f,  '
+                      'recall_score: %.6f,  '
                       'speed: %d images/sec ' % (epoch_num,
                                                  self.iter_num,
                                                  loss1,
@@ -258,15 +358,17 @@ class Train(object):
                                                  loss3,
                                                  acc3,
                                                  current_loss,
+                                                 recall_score,
                                                  images_per_sec))
 
-      return total_loss, num_train_batches
+      return total_loss,total_recall, num_train_batches
 
     def distributed_test_epoch(epoch_num):
       total_loss=0.
       total_acc1=0.
       total_acc2 = 0.
       total_acc3 = 0.
+      total_recall=0.
       num_test_batches = 0.0
       self.model.eval()
       with torch.no_grad():
@@ -276,46 +378,54 @@ class Train(object):
           target_torch = torch.from_numpy(target)
 
           data, target = images_torch.to(self.device), target_torch.to(self.device)
+          target = target.long()
 
           output1, output2, output3 = self.model(data)
 
           loss1, loss2, loss3, acc1, acc2, acc3 = self.loss_function([output1, output2, output3], target)
-
+          recall_score = self.recall_function([output1, output2, output3], target)
           cur_loss=loss1+loss2+loss3
           total_loss+=cur_loss
           total_acc1+=acc1
           total_acc2 += acc2
           total_acc3 += acc3
+          total_recall+=recall_score
           num_test_batches += 1
       return total_loss,\
              total_acc1,\
              total_acc2,\
              total_acc3, \
+             total_recall,\
              num_test_batches
 
 
     for epoch in range(self.epochs):
-      self.scheduler.step()
+      # self.scheduler.step()
       for param_group in self.optimizer.param_groups:
         lr=param_group['lr']
       logger.info('learning rate: [%f]' %(lr))
       start=time.time()
 
-      train_total_loss, num_train_batches = distributed_train_epoch(epoch)
-      test_total_loss,test_total_acc1,test_total_acc2,test_total_acc3, num_test_batches = distributed_test_epoch(epoch)
+      train_total_loss,total_recall_train, num_train_batches = distributed_train_epoch(epoch)
 
+      test_total_loss,test_total_acc1,test_total_acc2,test_total_acc3, total_recall_val,num_test_batches = distributed_test_epoch(epoch)
 
+      self.scheduler.step(test_total_loss / num_test_batches)
 
       time_consume_per_epoch=time.time()-start
       training_massage = 'Epoch: %d, ' \
                          'Train Loss: %.6f, ' \
+                         'Train recall: %.6f, ' \
                          'Test Loss: %.6f ' \
+                         'Test recall: %.6f ' \
                          'Test acc1: %.6f '\
                          'Test acc2: %.6f '\
-                         'Test acc3: %.6f '\
+                         'Test acc3: %.6f ' \
                          'Time consume: %.2f'%(epoch,
                                                train_total_loss / num_train_batches,
+                                               total_recall_train/num_train_batches,
                                                test_total_loss / num_test_batches,
+                                               total_recall_val / num_test_batches,
                                                test_total_acc1 / num_test_batches,
                                                test_total_acc2 / num_test_batches,
                                                test_total_acc3 / num_test_batches,
@@ -325,7 +435,7 @@ class Train(object):
 
 
       #### save the model every end of epoch
-      current_model_saved_name='./model/epoch_%d_val_loss%.6f.pth'%(epoch,test_total_loss / num_test_batches)
+      current_model_saved_name='./models/epoch_%d_val_loss%.6f.pth'%(epoch,test_total_loss / num_test_batches)
 
       logger.info('A model saved to %s' % current_model_saved_name)
 

@@ -3,7 +3,7 @@ import os
 import pandas as pd
 
 
-data_dir='/media/lz/ssd_2/kaggle/data/images_raw'
+data_dir='/media/lz/ssd_2/kaggle/data/images'
 
 train_df_ = pd.read_csv(os.path.join('/media/lz/ssd_2/kaggle/data','train.csv'))
 
@@ -11,8 +11,7 @@ train_df_ = pd.read_csv(os.path.join('/media/lz/ssd_2/kaggle/data','train.csv'))
 image_list=os.listdir(data_dir)
 
 
-
-ratio=0.9
+ratio=0.85
 length=len(image_list)
 
 train_set=image_list[:int(ratio*length)]
@@ -44,21 +43,40 @@ print('consonant_diacritic_map class has %d'%consonant_diacritic_class)
 ###
 
 #
-# def static_data_distribution(map,classes):
-#     map=list(map)
-#     cnt_map={}
-#     for i in range(len(map)):
-#         if map[i]in cnt_map:
-#             cnt_map[map[i]]+=1
-#         else:
-#             cnt_map[map[i]] = 1
-#
-#     for k,v in cnt_map.items():
-#         print(k,v)
-#
-# static_data_distribution(grapheme_root_map,grapheme_root_class)
-# static_data_distribution(vowel_diacritic_map,vowel_diacritic_class)
-# static_data_distribution(consonant_diacritic_map,consonant_diacritic_class)
+def static_data_distribution(map):
+    map=list(map)
+    cnt_map={}
+    for i in range(len(map)):
+        if map[i]in cnt_map:
+            cnt_map[map[i]]+=1
+        else:
+            cnt_map[map[i]] = 1
+
+
+    sorted_cnt_map=sorted(cnt_map.items(), key=lambda a: a[0])
+
+
+
+    for item in sorted_cnt_map:
+        print(item[0],item[1])
+
+    return sorted_cnt_map
+
+
+
+static_data_distribution(grapheme_root_map)
+static_data_distribution(vowel_diacritic_map)
+static_data_distribution(consonant_diacritic_map)
+
+
+
+
+### we need balance
+
+
+
+
+
 
 
 train_f=open('train.txt','w')

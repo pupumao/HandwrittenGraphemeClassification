@@ -4,7 +4,7 @@ from lib.core.model.ShuffleNet_Series.ShuffleNetV2.blocks import ShuffleV2Block
 
 from train_config import config as cfg
 class ShuffleNetV2(nn.Module):
-    def __init__(self, input_size=224, n_class=1000, model_size='1.5x'):
+    def __init__(self, input_size=224, n_class=1000, model_size='1.0x'):
         super(ShuffleNetV2, self).__init__()
         print('model size is ', model_size)
 

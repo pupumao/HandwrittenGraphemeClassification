@@ -1,7 +1,7 @@
 from lib.dataset.dataietr import DataIter
 from train_config import config
 from lib.core.model.ShuffleNet_Series.ShuffleNetV2.network import ShuffleNetV2
-from lib.core.model.semodel.SeResnet import se_resnet50
+from lib.core.model.semodel.SeResnet import se_resnet50,se_resnext50_32x4d
 import torch
 import time
 import argparse
@@ -14,8 +14,8 @@ os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 import cv2
 from train_config import config as cfg
 cfg.TRAIN.batch_size=1
-
-ds = DataIter(cfg.DATA.root_path,cfg.DATA.val_txt_path,False)
+cfg.TRAIN.process_num=1
+ds = DataIter(cfg.DATA.root_path,cfg.DATA.val_txt_path,True)
 
 
 
@@ -25,7 +25,7 @@ def vis(model_path):
     ###build model
 
 
-    model=se_resnet50()
+    model=se_resnext50_32x4d()
 
     model.load_state_dict(torch.load(model_path, map_location=device), strict=False)
     model.to(device)
@@ -55,38 +55,37 @@ def vis(model_path):
         img_show = np.array(images)
 
         # img_show=np.transpose(img_show[0],axes=[1,2,0])
-
-        images=torch.from_numpy(images)
-        images=images.to(device)
-
-        start=time.time()
-
-        logit1, logit2, logit3 = model(images)
-        res1 = torch.softmax(logit1,1)
-        res2 = torch.softmax(logit2,1)
-        res3 = torch.softmax(logit3,1)
-
-        res1=res1.cpu().detach().numpy()[0,:]
-
-        res2 = res2.cpu().detach().numpy()[0,:]
-        res3 = res3.cpu().detach().numpy()[0,:]
-        cls1_pre_list.append(np.argmax(res1))
-        cls2_pre_list.append(np.argmax(res2))
-        cls3_pre_list.append(np.argmax(res3))
+        #
+        # images=torch.from_numpy(images)
+        # images=images.to(device)
+        #
+        # start=time.time()
+        #
+        # logit1, logit2, logit3 = model(images)
+        # res1 = torch.softmax(logit1,1)
+        # res2 = torch.softmax(logit2,1)
+        # res3 = torch.softmax(logit3,1)
+        #
+        #
+        # res1=res1.cpu().detach().numpy()[0]
+        #
+        # res2 = res2.cpu().detach().numpy()[0]
+        # res3 = res3.cpu().detach().numpy()[0]
+        # cls1_pre_list.append(np.argmax(res1))
+        # cls2_pre_list.append(np.argmax(res2))
+        # cls3_pre_list.append(np.argmax(res3))
 
 
         #print(res)
 
-        # img_show=img_show.astype(np.uint8)
-        #
-        # img_show=cv2.cvtColor(img_show, cv2.COLOR_BGR2RGB)
+        img_show=(img_show[0]*255).astype(np.uint8)
+        img_show=np.transpose(img_show,[1,2,0])
+        img_show=cv2.cvtColor(img_show, cv2.COLOR_BGR2RGB)
 
 
 
-        # cv2.imshow('tmp',img_show)
-        # cv2.waitKey(0)
-
-
+        cv2.imshow('tmp',img_show)
+        cv2.waitKey(0)
 
 
     score1=sklearn.metrics.recall_score(

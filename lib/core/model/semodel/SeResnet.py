@@ -8,7 +8,7 @@ import math
 import torch
 import torch.nn as nn
 from torch.utils import model_zoo
-
+from dropblock import DropBlock2D
 __all__ = ['SENet', 'senet154', 'se_resnet50', 'se_resnet101', 'se_resnet152',
            'se_resnext50_32x4d', 'se_resnext101_32x4d']
 
@@ -320,16 +320,18 @@ class SENet(nn.Module):
             downsample_kernel_size=downsample_kernel_size,
             downsample_padding=downsample_padding
         )
-        self.avg_pool = nn.AdaptiveAvgPool2d((1,1))
-        self.dropout = nn.Dropout(dropout_p) if dropout_p is not None else None
-        self.globalpool = nn.AdaptiveAvgPool2d((1, 1))
+
+        self.dropout = nn.Dropout2d(0.5)
+        self.global_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
 
 
         self.conv_1_ = nn.Conv2d(2048, 168, (1, 1), 1, bias=True)
         self.conv_2_ = nn.Conv2d(2048, 11, (1, 1), 1, bias=True)
         self.conv_3_ = nn.Conv2d(2048, 7, (1, 1), 1, bias=True)
 
+        self.drop_block1 = DropBlock2D(block_size=3, drop_prob=0.3)
 
+        self.drop_block2 = DropBlock2D(block_size=3, drop_prob=0.3)
     def _make_layer(self, block, planes, blocks, groups, reduction, stride=1,
                     downsample_kernel_size=1, downsample_padding=0):
         downsample = None
@@ -354,15 +356,21 @@ class SENet(nn.Module):
         x = self.layer0(x)
         x = self.layer1(x)
         x = self.layer2(x)
+        x = self.drop_block1(x)
         x = self.layer3(x)
+
+        x = self.drop_block2(x)
         x = self.layer4(x)
+
         return x
 
 
 
     def forward(self, x):
         x = self.features(x)
-        x = self.globalpool(x)
+
+        x = self.global_avg_pool(x)
+        x = self.dropout(x)
         y1 = self.conv_1_(x)
         y2 = self.conv_2_(x)
         y3 = self.conv_3_(x)

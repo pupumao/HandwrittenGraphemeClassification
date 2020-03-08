@@ -36,7 +36,16 @@ class data_info(object):
         with open(self.ann_file, 'r') as f:
             image_label_list = f.readlines()
 
-        self.metas=image_label_list
+
+
+        for line in image_label_list:
+            cur_data_info = line.rstrip().split(' ')
+            fname = cur_data_info[0]
+            label = cur_data_info[1:4]
+            label = [int(x) for x in label]
+
+
+            self.metas.append([fname,label])
 
             ###some change can be made here
 
@@ -145,71 +154,113 @@ class HWGDataIter():
 
         return self.raw_data_set_size
 
-    def balance(self,anns):
+    def balance(self,anns,training_flag=False):
+
+        def static_data_distribution(map):
+            map = list(map)
+            cnt_map = {}
+            for i in range(len(map)):
+                if map[i] in cnt_map:
+                    cnt_map[map[i]] += 1
+                else:
+                    cnt_map[map[i]] = 1
+
+            sorted_cnt_map = sorted(cnt_map.items(), key=lambda a: a[0])
+
+            for item in sorted_cnt_map:
+                print(item[0], item[1])
+
+            return cnt_map
+
+
         res_anns = copy.deepcopy(anns)
 
-        lar_count = 0
+        ### step 1  statics
+
+        STATIC_LABELS = []
         for ann in anns:
 
-            ### 300w  balance,  according to keypoints
-            if ann['keypoints'] is not None:
+            fname = ann[0]
+            label = ann[1]
+            STATIC_LABELS.append(label)
 
-                label = ann['keypoints']
-                label = np.array(label, dtype=np.float).reshape((-1, 2))
-                bbox = ann['bbox']
-                bbox_width = bbox[2] - bbox[0]
-                bbox_height = bbox[3] - bbox[1]
+        STATIC_LABELS = np.array(STATIC_LABELS)
 
-                if bbox_width < 50 or bbox_height < 50:
-                    res_anns.remove(ann)
+        print('before balance')
+        print('the first class distribution')
+        s_dict1=static_data_distribution(STATIC_LABELS[:, 0])
+        print('the first class distribution')
+        s_dict2=static_data_distribution(STATIC_LABELS[:, 1])
+        print('the first class distribution')
+        s_dict3=static_data_distribution(STATIC_LABELS[:, 2])
 
-                left_eye_close = np.sqrt(
-                    np.square(label[37, 0] - label[41, 0]) +
-                    np.square(label[37, 1] - label[41, 1])) / bbox_height < self.eye_close_thres \
-                    or np.sqrt(np.square(label[38, 0] - label[40, 0]) +
-                               np.square(label[38, 1] - label[40, 1])) / bbox_height < self.eye_close_thres
-                right_eye_close = np.sqrt(
-                    np.square(label[43, 0] - label[47, 0]) +
-                    np.square(label[43, 1] - label[47, 1])) / bbox_height <  self.eye_close_thres \
-                    or np.sqrt(np.square(label[44, 0] - label[46, 0]) +
-                               np.square(label[44, 1] - label[46, 1])) / bbox_height < self.eye_close_thres
-                if left_eye_close or right_eye_close:
-                    for i in range(10):
-                        res_anns.append(ann)
-                ###half face
-                if np.sqrt(np.square(label[36, 0] - label[45, 0]) +
-                           np.square(label[36, 1] - label[45, 1])) / bbox_width < 0.5:
-                    for i in range(20):
-                        res_anns.append(ann)
 
-                if np.sqrt(np.square(label[62, 0] - label[66, 0]) +
-                           np.square(label[62, 1] - label[66, 1])) / bbox_height > 0.15:
-                    for i in range(20):
+
+
+        STATIC_LABELS=[]
+        for ann in anns:
+
+            fname = ann[0]
+            label = ann[1]
+            STATIC_LABELS.append(label)
+
+            ## aug training set
+            if training_flag:
+                if s_dict1[label[0]]<500:
+                    res_anns.append(ann)
+
+                if s_dict1[label[0]]<200:
+                    for _ in range(2):
                         res_anns.append(ann)
 
-                if np.sqrt(np.square(label[62, 0] - label[66, 0]) +
-                           np.square(label[62, 1] - label[66, 1])) / cfg.MODEL.hin > self.big_mouth_open_thres:
-                    for i in range(50):
+                ## second class
+                if label[1]==3:
+                    res_anns.append(ann)
+                if label[1]==5 or label[1]==6 or label[1]==8 or label[1]==10:
+                    for _ in range(4):
                         res_anns.append(ann)
-                ##########eyes diff aug
-                if left_eye_close and not right_eye_close:
-                    for i in range(40):
+
+                ## third class
+                if label[2] == 1:
+                    for _ in range(2):
                         res_anns.append(ann)
-                    lar_count += 1
-                if not left_eye_close and right_eye_close:
-                    for i in range(40):
+
+
+                if  label[2]==3:
+                    for _ in range(20):
                         res_anns.append(ann)
-                    lar_count += 1
-
-            # elif ann['attr'] is not None:
-            #
-            #     ###celeba data,
-            #     if ann['attr'][0]>0:
-            #         for i in range(10):
-            #             res_anns.append(ann)
+                if  label[2]==6:
+                    for _ in range(10):
+                        res_anns.append(ann)
 
 
+        STATIC_LABELS=np.array(STATIC_LABELS)
 
+        print('before balance')
+        print('the first class distribution')
+        static_data_distribution(STATIC_LABELS[:,0])
+        print('the first class distribution')
+        static_data_distribution(STATIC_LABELS[:, 1])
+        print('the first class distribution')
+        static_data_distribution(STATIC_LABELS[:, 2])
+
+        STATIC_LABELS_after = []
+        for ann in res_anns:
+
+            fname = ann[0]
+            label = ann[1]
+            STATIC_LABELS_after.append(label)
+
+
+        STATIC_LABELS_after = np.array(STATIC_LABELS_after)
+
+        print('after balance')
+        print('the first class distribution')
+        static_data_distribution(STATIC_LABELS_after[:, 0])
+        print('the first class distribution')
+        static_data_distribution(STATIC_LABELS_after[:, 1])
+        print('the first class distribution')
+        static_data_distribution(STATIC_LABELS_after[:, 2])
 
 
         logger.info('befor balance the dataset contains %d images' % (len(anns)))
@@ -227,7 +278,7 @@ class HWGDataIter():
         ann_info = data_info(im_root_path, ann_file)
         all_samples = ann_info.get_all_sample()
         self.raw_data_set_size=len(all_samples)
-        # balanced_samples = self.balance(all_samples)
+        all_samples = self.balance(all_samples,self.training_flag)
         return all_samples
 
 
@@ -236,13 +287,9 @@ class HWGDataIter():
         ####customed here
 
 
-        cur_data_info=dp.rstrip().split(' ')
-        fname= cur_data_info[0]
-        label=cur_data_info[1:4]
-        label=[int(x) for x in label]
-        # attr =dp['attr']
+        fname= dp[0]
+        label=dp[1]
 
-        #### 300W
         image = cv2.imread(fname, cv2.IMREAD_COLOR)
         image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
         label = np.array(label, dtype=np.float)
@@ -250,33 +297,51 @@ class HWGDataIter():
 
         if is_training:
             if random.uniform(0, 1) > 0.5:
-                image=Random_crop(image,shrink=0.2)
+                image=Random_crop(image,shrink=0.4)
             # if random.uniform(0, 1) > 0.5.:
             #     image, _ = Mirror(image, label=None, symmetry=None)
+
             if random.uniform(0, 1) > 0.0:
-                angle = random.uniform(-30, 30)
+                angle = random.uniform(-20, 20)
                 image, _ = Rotate_aug(image, label=None, angle=angle)
 
             if random.uniform(0, 1) > 0.5:
-                strength = random.uniform(0, 50)
+                strength = random.uniform(0, 30)
                 image, _ = Affine_aug(image, strength=strength, label=None)
 
-            if random.uniform(0, 1) > 0.5:
-                image=self.color_augmentor(image)
-            if random.uniform(0, 1) > 0.5:
-                image=pixel_jitter(image,15)
-            if random.uniform(0, 1) > 0.5:
-                image = Img_dropout(image, 0.2)
+            # if random.uniform(0, 1) > 0.5:
+            #     image=self.color_augmentor(image)
+            # if random.uniform(0, 1) > 0.5:
+            #     image=pixel_jitter(image,15)
 
             if random.uniform(0, 1) > 0.5:
-                image = Padding_aug(image, 0.3)
+                if random.uniform(0, 1) > 0.5:
+                    ksize = random.choice([3, 5, 9, 11])
+                    image = cv2.GaussianBlur(image,(ksize,ksize),1.5)
+                if random.uniform(0, 1) > 0.5:
+                    ksize = random.choice([3, 5, 9, 11])
+                    image = cv2.medianBlur(image, ksize)
+                if random.uniform(0, 1) > 0.5:
+                    ksize = random.choice([3, 5, 9, 11])
+                    image = cv2.blur(image, (ksize,ksize))
 
-        interp_methods = [cv2.INTER_LINEAR, cv2.INTER_CUBIC, cv2.INTER_AREA, cv2.INTER_NEAREST,
-                          cv2.INTER_LANCZOS4]
-        interp_method = random.choice(interp_methods)
+            # if random.uniform(0, 1) > 0.5:
+            #     image = pixel_jitter(image, 15)
+            # if random.uniform(0, 1) > 0.5:
+            #     image = Img_dropout(image, 0.2)
 
-        image = cv2.resize(image, (cfg.MODEL.win, cfg.MODEL.hin), interpolation=interp_method)
+            # if random.uniform(0, 1) > 0.5:
+            #     image = Padding_aug(image, 0.3)
 
+            interp_methods = [cv2.INTER_LINEAR, cv2.INTER_CUBIC, cv2.INTER_AREA, cv2.INTER_NEAREST,
+                              cv2.INTER_LANCZOS4]
+            interp_method = random.choice(interp_methods)
+
+            image = cv2.resize(image, (cfg.MODEL.win, cfg.MODEL.hin), interpolation=interp_method)
+
+
+
+        image = cv2.resize(image, (cfg.MODEL.win, cfg.MODEL.hin), interpolation=cv2.INTER_NEAREST)
         #######head pose
 
         if cfg.MODEL.channel==1:
@@ -292,6 +357,8 @@ class HWGDataIter():
 
         if not cfg.TRAIN.vis :
             image=image/255.
+
+
         return image, label
 
 
