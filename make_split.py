@@ -2,14 +2,13 @@
 import os
 import pandas as pd
 
+from train_config import config as cfg
 
-data_dir='/media/lz/ssd_2/kaggle/data/images_raw'
+data_dir= os.path.join(cfg.DATA.root_path, 'train_imgs')
 
-train_df_ = pd.read_csv(os.path.join('/media/lz/ssd_2/kaggle/data','train.csv'))
-
+train_df_ = pd.read_csv(os.path.join(cfg.DATA.root_path,'train.csv'))
 
 image_list=os.listdir(data_dir)
-
 
 
 ratio=0.9
